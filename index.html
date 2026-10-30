@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="ko" data-theme="light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>My To-Do | 스마트 할 일 관리</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app-container">
+    <!-- 헤더 영역 -->
+    <header class="app-header">
+      <div class="header-top">
+        <h1 class="brand-title">
+          <svg class="brand-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M9 11l3 3L22 4"></path>
+            <path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"></path>
+          </svg>
+          My To-Do
+        </h1>
+        <div class="header-actions">
+          <button id="themeToggleBtn" class="btn-icon" title="테마 전환 (라이트 / 다크 / 세피아)" aria-label="테마 전환">
+            <!-- Moon Icon (for light mode) -->
+            <svg id="moonIcon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"></path>
+            </svg>
+            <!-- Sun Icon (for dark mode) -->
+            <svg id="sunIcon" style="display:none;" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="5"></circle>
+              <line x1="12" y1="1" x2="12" y2="3"></line>
+              <line x1="12" y1="21" x2="12" y2="23"></line>
+              <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+              <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+              <line x1="1" y1="12" x2="3" y2="12"></line>
+              <line x1="21" y1="12" x2="23" y2="12"></line>
+              <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+              <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+            </svg>
+            <!-- Coffee Icon (for sepia mode) -->
+            <svg id="coffeeIcon" style="display:none;" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M18 8h1a4 4 0 0 1 0 8h-1"></path>
+              <path d="M2 8h16v9a4 4 0 0 1-4 4H6a4 4 0 0 1-4-4V8z"></path>
+              <line x1="6" y1="1" x2="6" y2="4"></line>
+              <line x1="10" y1="1" x2="10" y2="4"></line>
+              <line x1="14" y1="1" x2="14" y2="4"></line>
+            </svg>
+          </button>
+        </div>
+      </div>
+
+      <!-- 날짜 및 달성률 바 -->
+      <div class="today-banner">
+        <div class="date-info">
+          <span id="currentDateText" class="today-text">2026년 10월 30일 금요일</span>
+          <span id="progressSummary" class="progress-text">0 / 0 완료 (0%)</span>
+        </div>
+        <div class="progress-track" title="오늘의 완료율">
+          <div id="progressBar" class="progress-fill"></div>
+        </div>
+      </div>
+    </header>
+
+    <!-- 빠른 할 일 추가 폼 -->
+    <section class="card-input">
+      <form id="todoForm" autocomplete="off">
+        <div class="input-row-main">
+          <input 
+            type="text" 
+            id="taskTitleInput" 
+            class="task-input" 
+            placeholder="새로운 할 일을 입력하고 Enter를 누르세요..." 
+            required
+            maxlength="120"
+          >
+          <button type="submit" class="btn-add">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="12" y1="5" x2="12" y2="19"></line>
+              <line x1="5" y1="12" x2="19" y2="12"></line>
+            </svg>
+            추가
+          </button>
+        </div>
+
+        <div class="input-options">
+          <!-- 우선순위 -->
+          <select id="prioritySelect" class="select-pill" title="중요도 설정">
+            <option value="medium">중요도: 보통</option>
+            <option value="high">중요도: 높음 🔥</option>
+            <option value="low">중요도: 낮음 ☕</option>
+          </select>
+
+          <!-- 마감일자 -->
+          <input type="date" id="dueDateInput" class="date-input" title="마감일 지정">
+
+          <!-- 카테고리 -->
+          <select id="categorySelect" class="category-input" title="카테고리">
+            <option value="업무">💼 업무</option>
+            <option value="개인">🏠 개인</option>
+            <option value="공부">📚 공부</option>
+            <option value="기타">🔖 기타</option>
+          </select>
+        </div>
+      </form>
+    </section>
+
+    <!-- 필터 및 정렬 바 -->
+    <div class="controls-bar">
+      <div class="tabs-filter">
+        <button class="tab-btn active" data-filter="all">전체</button>
+        <button class="tab-btn" data-filter="active">진행 중</button>
+        <button class="tab-btn" data-filter="completed">완료됨</button>
+      </div>
+
+      <div class="search-and-sort">
+        <div class="search-box">
+          <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="11" cy="11" r="8"></circle>
+            <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+          </svg>
+          <input type="text" id="searchInput" class="search-input" placeholder="할 일 검색...">
+        </div>
+
+        <select id="sortSelect" class="sort-select" title="정렬 기준">
+          <option value="created-desc">최신 등록순</option>
+          <option value="due-asc">마감일 빠른순</option>
+          <option value="priority-desc">중요도 높은순</option>
+          <option value="title-asc">가나다순</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- 진행 중인 할 일 목록 영역 -->
+    <section id="activeSection">
+      <div class="section-title">
+        <span>진행 중인 할 일 <span id="activeCountBadge">(0)</span></span>
+      </div>
+      <div id="activeTasksList" class="tasks-container">
+        <!-- 동적으로 자바스크립트 렌더링 -->
+      </div>
+    </section>
+
+    <!-- 완료한 목록 (하단 분리 및 접기/펼치기 아코디언) -->
+    <section id="completedSection" class="completed-section">
+      <div class="accordion-header open" id="accordionHeader">
+        <div class="accordion-title-wrap">
+          <svg class="chevron-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="6 9 12 15 18 9"></polyline>
+          </svg>
+          <span>완료한 목록 <span id="completedCountBadge">(0)</span></span>
+        </div>
+        <button type="button" id="clearCompletedBtn" class="btn-clear-completed" style="display:none;">
+          완료 항목 모두 비우기
+        </button>
+      </div>
+
+      <div id="completedTasksWrapper" class="completed-list-wrapper show">
+        <div id="completedTasksList" class="tasks-container">
+          <!-- 완료된 할 일 동적 렌더링 -->
+        </div>
+      </div>
+    </section>
+
+    <!-- 푸터 -->
+    <footer class="app-footer">
+      <span id="footerStats">남은 할 일: 0개</span>
+      <span>데이터는 브라우저 로컬 저장소에 안전하게 보관됩니다.</span>
+    </footer>
+  </div>
+
+  <!-- 상세 및 수정 모달 -->
+  <div id="editModal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h2 id="modalTitle" class="modal-title">할 일 수정</h2>
+        <button id="closeModalBtn" class="btn-icon" aria-label="닫기">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18"></line>
+            <line x1="6" y1="6" x2="18" y2="18"></line>
+          </svg>
+        </button>
+      </div>
+
+      <form id="editForm">
+        <input type="hidden" id="editTaskId">
+        
+        <div class="modal-body">
+          <div class="form-group">
+            <label class="form-label" for="editTaskTitle">할 일 제목</label>
+            <input type="text" id="editTaskTitle" class="form-input" required maxlength="120">
+          </div>
+
+          <div style="display: flex; gap: 0.75rem;">
+            <div class="form-group" style="flex: 1;">
+              <label class="form-label" for="editPriority">중요도</label>
+              <select id="editPriority" class="form-select">
+                <option value="high">높음 🔥</option>
+                <option value="medium">보통</option>
+                <option value="low">낮음 ☕</option>
+              </select>
+            </div>
+
+            <div class="form-group" style="flex: 1;">
+              <label class="form-label" for="editCategory">카테고리</label>
+              <select id="editCategory" class="form-select">
+                <option value="업무">💼 업무</option>
+                <option value="개인">🏠 개인</option>
+                <option value="공부">📚 공부</option>
+                <option value="기타">🔖 기타</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="editDueDate">마감일자</label>
+            <input type="date" id="editDueDate" class="form-input">
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="editMemo">세부 메모 / 참고 사항</label>
+            <textarea id="editMemo" class="form-textarea" placeholder="추가 설명이나 메모를 남겨보세요..."></textarea>
+          </div>
+        </div>
+
+        <div class="modal-footer">
+          <button type="button" id="cancelModalBtn" class="btn-secondary">취소</button>
+          <button type="submit" class="btn-primary">저장하기</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- 토스트 알림 컨테이너 -->
+  <div id="toastContainer" class="toast-container"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
+
