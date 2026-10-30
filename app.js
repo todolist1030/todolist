@@ -15,6 +15,19 @@
 const STORAGE_KEY = 'todo_app_tasks_v1';
 const THEME_KEY = 'todo_theme_mode';
 
+// Supabase Configuration & Client Initialization
+const SUPABASE_URL = 'https://lqfrldvbngtrtjhagjyp.supabase.co';
+const SUPABASE_ANON_KEY = 'sb_publishable_aEYmYwtasi-MHfKiXt0K-g_Uux65y89';
+
+let supabaseClient = null;
+if (window.supabase && window.supabase.createClient) {
+  try {
+    supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  } catch (err) {
+    console.warn('Supabase 초기화 실패:', err);
+  }
+}
+
 // Initial Sample Data for First-time Users
 const INITIAL_SAMPLE_TASKS = [
   {
@@ -64,7 +77,8 @@ const state = {
 
 // DOM Elements
 const elements = {
-  // Theme
+  // Theme & Cloud Sync
+  syncBadge: document.getElementById('syncBadge'),
   themeToggleBtn: document.getElementById('themeToggleBtn'),
   sunIcon: document.getElementById('sunIcon'),
   moonIcon: document.getElementById('moonIcon'),
@@ -122,6 +136,12 @@ const elements = {
    Helper Functions
    ========================================================================== */
 
+function updateSyncBadge(status, text) {
+  if (!elements.syncBadge) return;
+  elements.syncBadge.className = `sync-badge ${status}`;
+  elements.syncBadge.textContent = text;
+}
+
 function saveTasks() {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state.tasks));
@@ -130,18 +150,86 @@ function saveTasks() {
   }
 }
 
-function loadTasks() {
+async function syncLocalTasksToSupabase() {
+  if (!supabaseClient || state.tasks.length === 0) return;
   try {
-    const data = localStorage.getItem(STORAGE_KEY);
-    if (data) {
-      state.tasks = JSON.parse(data);
+    const rows = state.tasks.map(t => ({
+      id: t.id,
+      title: t.title,
+      completed: t.completed,
+      priority: t.priority,
+      due_date: t.dueDate,
+      category: t.category,
+      memo: t.memo,
+      completed_at: t.completedAt
+    }));
+    await supabaseClient.from('todos').upsert(rows);
+  } catch (err) {
+    console.warn('Supabase 동기화 예외:', err);
+  }
+}
+
+async function loadTasks() {
+  // 1. 빠른 초기 로딩: 로컬 스토리지 데이터 먼저 렌더링
+  try {
+    const cached = localStorage.getItem(STORAGE_KEY);
+    if (cached) {
+      state.tasks = JSON.parse(cached);
     } else {
       state.tasks = [...INITIAL_SAMPLE_TASKS];
       saveTasks();
     }
   } catch (err) {
-    console.error('LocalStorage 불러오기 실패:', err);
     state.tasks = [...INITIAL_SAMPLE_TASKS];
+  }
+  renderApp();
+
+  // 2. Supabase 클라우드 데이터 가져오기
+  if (!supabaseClient) {
+    updateSyncBadge('error', '⚠️ 로컬 모드');
+    return;
+  }
+
+  updateSyncBadge('', '🔄 연결 중...');
+
+  try {
+    const { data, error } = await supabaseClient
+      .from('todos')
+      .select('*')
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      console.warn('Supabase 데이터 조회 오류 (테이블 생성 여부 확인 필요):', error);
+      updateSyncBadge('error', '⚠️ 로컬 저장 모드');
+      return;
+    }
+
+    if (data && data.length > 0) {
+      // Supabase 데이터 컬럼을 프론트엔드 모델로 매핑
+      state.tasks = data.map(row => ({
+        id: row.id,
+        title: row.title,
+        completed: Boolean(row.completed),
+        createdAt: row.created_at,
+        completedAt: row.completed_at,
+        priority: row.priority || 'medium',
+        dueDate: row.due_date || null,
+        category: row.category || '업무',
+        memo: row.memo || ''
+      }));
+      saveTasks();
+      renderApp();
+      updateSyncBadge('connected', '🟢 Supabase 연결됨');
+    } else {
+      // 테이블이 비어있으면 초기 로컬 샘플 업로드
+      updateSyncBadge('connected', '🟢 Supabase 연결됨');
+      if (state.tasks.length > 0) {
+        await syncLocalTasksToSupabase();
+      }
+    }
+  } catch (err) {
+    console.error('Supabase 연결 예외:', err);
+    updateSyncBadge('error', '⚠️ 로컬 모드');
   }
 }
 
@@ -222,10 +310,10 @@ function getDDayInfo(dueDateStr) {
 }
 
 /* ==========================================================================
-   Task Operations (CRUD)
+   Task Operations (CRUD with Supabase & LocalStorage)
    ========================================================================== */
 
-function addTask(title, priority, dueDate, category) {
+async function addTask(title, priority, dueDate, category) {
   const newTask = {
     id: 'task-' + Date.now() + '-' + Math.random().toString(36).substring(2, 7),
     title: title.trim(),
@@ -242,9 +330,25 @@ function addTask(title, priority, dueDate, category) {
   saveTasks();
   renderApp();
   showToast('새 할 일이 등록되었습니다.', 'success');
+
+  if (supabaseClient) {
+    try {
+      await supabaseClient.from('todos').insert([{
+        id: newTask.id,
+        title: newTask.title,
+        completed: false,
+        priority: newTask.priority,
+        due_date: newTask.dueDate,
+        category: newTask.category,
+        memo: newTask.memo
+      }]);
+    } catch (err) {
+      console.warn('Supabase insert 실패:', err);
+    }
+  }
 }
 
-function toggleTask(id) {
+async function toggleTask(id) {
   const task = state.tasks.find(t => t.id === id);
   if (!task) return;
 
@@ -259,9 +363,20 @@ function toggleTask(id) {
 
   saveTasks();
   renderApp();
+
+  if (supabaseClient) {
+    try {
+      await supabaseClient.from('todos').update({
+        completed: task.completed,
+        completed_at: task.completedAt
+      }).eq('id', task.id);
+    } catch (err) {
+      console.warn('Supabase toggle update 실패:', err);
+    }
+  }
 }
 
-function deleteTask(id) {
+async function deleteTask(id) {
   const taskIndex = state.tasks.findIndex(t => t.id === id);
   if (taskIndex === -1) return;
 
@@ -270,9 +385,17 @@ function deleteTask(id) {
   saveTasks();
   renderApp();
   showToast(`'${title}' 삭제되었습니다.`, 'danger');
+
+  if (supabaseClient) {
+    try {
+      await supabaseClient.from('todos').delete().eq('id', id);
+    } catch (err) {
+      console.warn('Supabase delete 실패:', err);
+    }
+  }
 }
 
-function clearAllCompleted() {
+async function clearAllCompleted() {
   const completedCount = state.tasks.filter(t => t.completed).length;
   if (completedCount === 0) return;
 
@@ -281,6 +404,14 @@ function clearAllCompleted() {
     saveTasks();
     renderApp();
     showToast(`완료된 항목 ${completedCount}개가 정리되었습니다.`, 'danger');
+
+    if (supabaseClient) {
+      try {
+        await supabaseClient.from('todos').delete().eq('completed', true);
+      } catch (err) {
+        console.warn('Supabase clear completed 실패:', err);
+      }
+    }
   }
 }
 
@@ -304,7 +435,7 @@ function closeEditModal() {
   elements.editForm.reset();
 }
 
-function handleEditFormSubmit(e) {
+async function handleEditFormSubmit(e) {
   e.preventDefault();
   const id = elements.editTaskId.value;
   const task = state.tasks.find(t => t.id === id);
@@ -323,6 +454,20 @@ function handleEditFormSubmit(e) {
   closeEditModal();
   renderApp();
   showToast('할 일이 성공적으로 수정되었습니다.', 'success');
+
+  if (supabaseClient) {
+    try {
+      await supabaseClient.from('todos').update({
+        title: task.title,
+        priority: task.priority,
+        category: task.category,
+        due_date: task.dueDate,
+        memo: task.memo
+      }).eq('id', task.id);
+    } catch (err) {
+      console.warn('Supabase edit update 실패:', err);
+    }
+  }
 }
 
 /* ==========================================================================
@@ -657,14 +802,13 @@ function setupEventListeners() {
 }
 
 // Initialization
-function init() {
+async function init() {
   // Set current date banner
   elements.currentDateText.textContent = formatKoreanDate(new Date());
 
   setupTheme();
-  loadTasks();
   setupEventListeners();
-  renderApp();
+  await loadTasks();
 }
 
 document.addEventListener('DOMContentLoaded', init);
