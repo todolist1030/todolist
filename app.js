@@ -851,18 +851,23 @@ async function init() {
   setupTheme();
   setupEventListeners();
 
-  // 1. 빠른 캐시 먼저 표시
+  // 1. 빠른 초기 로딩: 로컬 스토리지 또는 기본 샘플 먼저 즉시 화면에 렌더링
   try {
     const cached = localStorage.getItem(STORAGE_KEY);
     if (cached) {
       state.tasks = JSON.parse(cached);
-      renderApp();
+    } else {
+      state.tasks = [...INITIAL_SAMPLE_TASKS];
+      saveTasks();
     }
-  } catch (err) {}
+  } catch (err) {
+    state.tasks = [...INITIAL_SAMPLE_TASKS];
+  }
+  renderApp(); // 화면을 지체 없이 바로 표시!
 
-  // 2. Supabase SDK 로딩 대기 (CDN 스크립트 비동기 대응, 최대 3초)
+  // 2. Supabase SDK 로딩 대기 (CDN 비동기 로딩 대응, 최대 2초)
   let attempts = 0;
-  while (!getSupabase() && attempts < 15) {
+  while (!getSupabase() && attempts < 10) {
     await new Promise(r => setTimeout(r, 200));
     attempts++;
   }
@@ -870,6 +875,11 @@ async function init() {
   // 3. 최신 데이터 조회 및 실시간 웹소켓 구독 시작
   await fetchFromSupabase(true);
   subscribeToRealtime();
+
+  // 4. 안전망: 웹소켓이 차단된 환경에서도 5초마다 자동 동기화 (폴링)
+  setInterval(() => {
+    fetchFromSupabase(false);
+  }, 5000);
 }
 
 document.addEventListener('DOMContentLoaded', init);
