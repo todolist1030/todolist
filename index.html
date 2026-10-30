@@ -7,7 +7,77 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <div class="app-container">
+
+  <!-- ==========================================================================
+       인증 화면 (로그인 / 회원가입) - 비로그인 시 표시
+       ========================================================================== -->
+  <div id="authView" class="auth-wrapper" style="display:none;">
+    <div class="auth-card">
+      <div class="auth-header">
+        <div class="auth-logo">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M9 11l3 3L22 4"></path>
+            <path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"></path>
+          </svg>
+        </div>
+        <h1 class="auth-title">My To-Do</h1>
+        <p class="auth-subtitle">나만의 스마트한 할 일 관리 서비스</p>
+      </div>
+
+      <!-- 로그인 / 회원가입 전환 탭 -->
+      <div class="auth-tabs">
+        <button type="button" id="tabLogin" class="auth-tab-btn active">로그인</button>
+        <button type="button" id="tabSignup" class="auth-tab-btn">회원가입</button>
+      </div>
+
+      <!-- 알림 메시지 (에러/성공) -->
+      <div id="authAlert" class="auth-alert"></div>
+
+      <!-- 인증 폼 -->
+      <form id="authForm" class="auth-form" autocomplete="on">
+        <div class="form-group">
+          <label class="form-label" for="authEmail">이메일 주소</label>
+          <input 
+            type="email" 
+            id="authEmail" 
+            class="form-input" 
+            placeholder="name@example.com" 
+            required 
+            autocomplete="email"
+          >
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="authPassword">비밀번호</label>
+          <input 
+            type="password" 
+            id="authPassword" 
+            class="form-input" 
+            placeholder="6자리 이상 비밀번호 입력" 
+            required 
+            minlength="6"
+            autocomplete="current-password"
+          >
+        </div>
+
+        <button type="submit" id="authSubmitBtn" class="auth-btn-submit">
+          로그인
+        </button>
+
+        <div style="text-align: center; margin-top: 0.5rem;">
+          <a href="#" id="toggleAuthModeLink" style="font-size: 0.825rem; color: var(--primary); text-decoration: none;">
+            계정이 없으신가요? 회원가입하기
+          </a>
+        </div>
+      </form>
+    </div>
+  </div>
+
+
+  <!-- ==========================================================================
+       메인 할 일 대시보드 화면 - 로그인 성공 시에만 표시
+       ========================================================================== -->
+  <div id="mainAppView" class="app-container" style="display:none;">
     <!-- 헤더 영역 -->
     <header class="app-header">
       <div class="header-top">
@@ -19,7 +89,8 @@
           My To-Do
         </h1>
         <div class="header-actions">
-          <span id="syncBadge" class="sync-badge" title="클라우드 동기화 상태">☁️ 로컬 모드</span>
+          <span id="userEmailBadge" class="user-email-badge" title="로그인된 계정">👤 사용자</span>
+          <span id="syncBadge" class="sync-badge" title="클라우드 동기화 상태">🟢 실시간 동기화</span>
           <button id="themeToggleBtn" class="btn-icon" title="테마 전환 (라이트 / 다크 / 세피아)" aria-label="테마 전환">
             <!-- Moon Icon (for light mode) -->
             <svg id="moonIcon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -46,6 +117,7 @@
               <line x1="14" y1="1" x2="14" y2="4"></line>
             </svg>
           </button>
+          <button type="button" id="logoutBtn" class="btn-logout" title="로그아웃">로그아웃</button>
         </div>
       </div>
 
@@ -164,7 +236,7 @@
     <!-- 푸터 -->
     <footer class="app-footer">
       <span id="footerStats">남은 할 일: 0개</span>
-      <span>데이터는 브라우저 로컬 저장소에 안전하게 보관됩니다.</span>
+      <span>Supabase 클라우드 데이터베이스에 안전하게 보관됩니다.</span>
     </footer>
   </div>
 
@@ -243,4 +315,3 @@
   <script src="app.js"></script>
 </body>
 </html>
-

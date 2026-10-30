@@ -1,26 +1,24 @@
 /**
- * My To-Do Application
+ * My To-Do Application with Supabase Auth & RLS
  * Features:
- * - Task CRUD with persistence (localStorage)
- * - Separation of Active Tasks and Completed Tasks (Accordion)
- * - Priority, Due-Date (D-Day indicator), Category Tags
- * - Real-time Progress Bar & Statistics
- * - Search, Filter, Sort
- * - Detailed Edit Modal
- * - Dark / Light Theme Toggle
- * - Accessible Toast Notifications
+ * - Supabase Authentication (Email/Password Sign-in & Sign-up)
+ * - User-scoped Todos (RLS: Each user only accesses their own todos)
+ * - Realtime Synchronization & 5s Polling Fallback
+ * - Light / Dark / Sepia (Warm) Themes
+ * - Priority, Due-date (D-Day badge), Categories, Details Modal
  */
 
-// Storage Keys
-const STORAGE_KEY = 'todo_app_tasks_v1';
+// Storage & Supabase Keys
+const STORAGE_PREFIX = 'todo_app_user_';
 const THEME_KEY = 'todo_theme_mode';
 
-// Supabase Configuration & Client Initialization
 const SUPABASE_URL = 'https://lqfrldvbngtrtjhagjyp.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_aEYmYwtasi-MHfKiXt0K-g_Uux65y89';
 
 let supabaseClient = null;
 let realtimeChannel = null;
+let currentUser = null;
+let authMode = 'login'; // 'login' | 'signup'
 
 function getSupabase() {
   if (supabaseClient) return supabaseClient;
@@ -35,43 +33,6 @@ function getSupabase() {
   return null;
 }
 
-// Initial Sample Data for First-time Users
-const INITIAL_SAMPLE_TASKS = [
-  {
-    id: 'sample-1',
-    title: '할 일 관리 앱 둘러보기 및 기능 확인',
-    completed: false,
-    createdAt: new Date(Date.now() - 3600000 * 2).toISOString(),
-    completedAt: null,
-    priority: 'high',
-    dueDate: new Date().toISOString().split('T')[0],
-    category: '업무',
-    memo: '우선순위, 마감일, 카테고리 태그 기능을 확인해보세요.'
-  },
-  {
-    id: 'sample-2',
-    title: '새로운 할 일 등록해보기 (Enter 키 활용)',
-    completed: false,
-    createdAt: new Date(Date.now() - 3600000).toISOString(),
-    completedAt: null,
-    priority: 'medium',
-    dueDate: new Date(Date.now() + 86400000 * 2).toISOString().split('T')[0],
-    category: '공부',
-    memo: '상단 입력창에서 내용을 적고 Enter를 치면 빠르게 등록됩니다.'
-  },
-  {
-    id: 'sample-3',
-    title: '완료한 목록 하단 조회 기능 확인하기',
-    completed: true,
-    createdAt: new Date(Date.now() - 86400000).toISOString(),
-    completedAt: new Date(Date.now() - 1800000).toISOString(),
-    priority: 'low',
-    dueDate: new Date(Date.now() - 86400000).toISOString().split('T')[0],
-    category: '개인',
-    memo: '체크된 일은 이렇게 아래 완료 목록에 보관되며, 언제든 다시 클릭해 복원할 수 있습니다.'
-  }
-];
-
 // Application State
 const state = {
   tasks: [],
@@ -84,7 +45,23 @@ const state = {
 
 // DOM Elements
 const elements = {
-  // Theme & Cloud Sync
+  // Views
+  authView: document.getElementById('authView'),
+  mainAppView: document.getElementById('mainAppView'),
+
+  // Auth Elements
+  authForm: document.getElementById('authForm'),
+  authEmail: document.getElementById('authEmail'),
+  authPassword: document.getElementById('authPassword'),
+  authSubmitBtn: document.getElementById('authSubmitBtn'),
+  authAlert: document.getElementById('authAlert'),
+  tabLogin: document.getElementById('tabLogin'),
+  tabSignup: document.getElementById('tabSignup'),
+  toggleAuthModeLink: document.getElementById('toggleAuthModeLink'),
+
+  // Header & User Actions
+  userEmailBadge: document.getElementById('userEmailBadge'),
+  logoutBtn: document.getElementById('logoutBtn'),
   syncBadge: document.getElementById('syncBadge'),
   themeToggleBtn: document.getElementById('themeToggleBtn'),
   sunIcon: document.getElementById('sunIcon'),
@@ -140,115 +117,37 @@ const elements = {
 };
 
 /* ==========================================================================
-   Helper Functions
+   Helper & UI Functions
    ========================================================================== */
 
-function updateSyncBadge(status, text) {
-  if (!elements.syncBadge) return;
-  elements.syncBadge.className = `sync-badge ${status}`;
-  elements.syncBadge.textContent = text;
+function getUserStorageKey() {
+  return currentUser ? `${STORAGE_PREFIX}${currentUser.id}` : 'todo_guest_tasks';
 }
 
-function saveTasks() {
+function saveUserTasks() {
+  if (!currentUser) return;
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state.tasks));
+    localStorage.setItem(getUserStorageKey(), JSON.stringify(state.tasks));
   } catch (err) {
     console.error('LocalStorage 저장 실패:', err);
   }
 }
 
-async function fetchFromSupabase(showStatus = true) {
-  const client = getSupabase();
-  if (!client) {
-    updateSyncBadge('error', '⚠️ 로컬 모드');
-    return false;
-  }
-
-  if (showStatus) updateSyncBadge('', '🔄 연결 중...');
-
+function loadUserCachedTasks() {
+  if (!currentUser) return;
   try {
-    const { data, error } = await client
-      .from('todos')
-      .select('*')
-      .order('created_at', { ascending: false });
-
-    if (error) {
-      console.warn('Supabase 데이터 조회 오류:', error);
-      updateSyncBadge('error', '⚠️ 권한 확인 필요');
-      return false;
-    }
-
-    if (data && data.length > 0) {
-      state.tasks = data.map(row => ({
-        id: row.id,
-        title: row.title,
-        completed: Boolean(row.completed),
-        createdAt: row.created_at,
-        completedAt: row.completed_at,
-        priority: row.priority || 'medium',
-        dueDate: row.due_date || null,
-        category: row.category || '업무',
-        memo: row.memo || ''
-      }));
-      saveTasks();
+    const cached = localStorage.getItem(getUserStorageKey());
+    if (cached) {
+      state.tasks = JSON.parse(cached);
       renderApp();
-      updateSyncBadge('connected', '🟢 실시간 동기화 중');
-      return true;
-    } else if (data && data.length === 0) {
-      // 테이블이 비어있으면 초기 로컬 샘플 업로드
-      updateSyncBadge('connected', '🟢 실시간 동기화 중');
-      if (state.tasks.length > 0) {
-        await syncLocalTasksToSupabase();
-      }
-      return true;
     }
-  } catch (err) {
-    console.error('Supabase 연결 예외:', err);
-    updateSyncBadge('error', '⚠️ 연결 오류');
-  }
-  return false;
+  } catch (err) {}
 }
 
-function subscribeToRealtime() {
-  const client = getSupabase();
-  if (!client || realtimeChannel) return;
-
-  try {
-    realtimeChannel = client
-      .channel('todos-realtime-channel')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'todos' }, async (payload) => {
-        console.log('⚡ 실시간 변경 감지 (Realtime):', payload);
-        await fetchFromSupabase(false);
-      })
-      .subscribe((status) => {
-        console.log('Supabase Realtime 연결 상태:', status);
-        if (status === 'SUBSCRIBED') {
-          updateSyncBadge('connected', '🟢 실시간 동기화 중');
-        }
-      });
-  } catch (err) {
-    console.warn('Realtime 구독 실패:', err);
-  }
-}
-
-async function syncLocalTasksToSupabase() {
-  const client = getSupabase();
-  if (!client || state.tasks.length === 0) return;
-  try {
-    const rows = state.tasks.map(t => ({
-      id: t.id,
-      title: t.title,
-      completed: t.completed,
-      priority: t.priority,
-      due_date: t.dueDate,
-      category: t.category,
-      memo: t.memo,
-      completed_at: t.completedAt
-    }));
-    await client.from('todos').upsert(rows);
-  } catch (err) {
-    console.warn('Supabase 동기화 예외:', err);
-  }
+function updateSyncBadge(status, text) {
+  if (!elements.syncBadge) return;
+  elements.syncBadge.className = `sync-badge ${status}`;
+  elements.syncBadge.textContent = text;
 }
 
 function showToast(message, type = 'info') {
@@ -305,10 +204,8 @@ function formatDateTimeShort(isoStr) {
   return `${m}월 ${date}일 ${hours}:${minutes}`;
 }
 
-// Calculate D-Day Badge
 function getDDayInfo(dueDateStr) {
   if (!dueDateStr) return null;
-  
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   
@@ -328,12 +225,237 @@ function getDDayInfo(dueDateStr) {
 }
 
 /* ==========================================================================
-   Task Operations (CRUD with Supabase & LocalStorage)
+   Supabase Authentication (회원가입 / 로그인 / 로그아웃)
+   ========================================================================== */
+
+function showAuthAlert(type, message) {
+  elements.authAlert.className = `auth-alert ${type}`;
+  elements.authAlert.textContent = message;
+}
+
+function clearAuthAlert() {
+  elements.authAlert.className = 'auth-alert';
+  elements.authAlert.textContent = '';
+}
+
+function setAuthMode(mode) {
+  authMode = mode;
+  clearAuthAlert();
+  if (mode === 'login') {
+    elements.tabLogin.classList.add('active');
+    elements.tabSignup.classList.remove('active');
+    elements.authSubmitBtn.textContent = '로그인';
+    elements.toggleAuthModeLink.textContent = '계정이 없으신가요? 회원가입하기';
+  } else {
+    elements.tabSignup.classList.add('active');
+    elements.tabLogin.classList.remove('active');
+    elements.authSubmitBtn.textContent = '회원가입';
+    elements.toggleAuthModeLink.textContent = '이미 계정이 있으신가요? 로그인하기';
+  }
+}
+
+function showAuthView() {
+  elements.authView.style.display = 'flex';
+  elements.mainAppView.style.display = 'none';
+  clearAuthAlert();
+}
+
+function showAppView(user) {
+  elements.authView.style.display = 'none';
+  elements.mainAppView.style.display = 'block';
+  elements.userEmailBadge.textContent = `👤 ${user.email}`;
+  elements.userEmailBadge.title = `로그인된 계정: ${user.email}`;
+}
+
+function getFriendlyAuthErrorMessage(msg) {
+  if (!msg) return '알 수 없는 오류가 발생했습니다.';
+  if (msg.includes('Invalid login credentials')) return '이메일 또는 비밀번호가 올바르지 않습니다.';
+  if (msg.includes('User already registered')) return '이미 가입된 이메일 주소입니다. 로그인해 주세요.';
+  if (msg.includes('Password should be at least')) return '비밀번호는 최소 6자리 이상이어야 합니다.';
+  if (msg.includes('Email not confirmed')) return '이메일 인증이 완료되지 않았습니다. 메일함을 확인해 주세요.';
+  return msg;
+}
+
+async function handleAuthSubmit(e) {
+  e.preventDefault();
+  const email = elements.authEmail.value.trim();
+  const password = elements.authPassword.value;
+
+  if (!email || !password) return;
+
+  elements.authSubmitBtn.disabled = true;
+  elements.authSubmitBtn.textContent = '처리 중...';
+  clearAuthAlert();
+
+  const client = getSupabase();
+  if (!client) {
+    showAuthAlert('error', 'Supabase 클라이언트를 초기화할 수 없습니다. 인터넷 연결을 확인해 주세요.');
+    elements.authSubmitBtn.disabled = false;
+    elements.authSubmitBtn.textContent = authMode === 'login' ? '로그인' : '회원가입';
+    return;
+  }
+
+  try {
+    if (authMode === 'login') {
+      const { data, error } = await client.auth.signInWithPassword({ email, password });
+      if (error) {
+        showAuthAlert('error', `로그인 실패: ${getFriendlyAuthErrorMessage(error.message)}`);
+      } else if (data.user) {
+        currentUser = data.user;
+        showToast(`어서오세요, ${currentUser.email}님!`, 'success');
+        showAppView(currentUser);
+        loadUserCachedTasks();
+        await fetchUserTodos(true);
+        subscribeToRealtime();
+      }
+    } else {
+      // 회원가입 (Sign up)
+      const { data, error } = await client.auth.signUp({ email, password });
+      if (error) {
+        showAuthAlert('error', `회원가입 실패: ${getFriendlyAuthErrorMessage(error.message)}`);
+      } else if (data.user) {
+        if (data.session) {
+          // 즉시 로그인 세션 생성 (Confirm email 꺼져있는 경우)
+          currentUser = data.user;
+          showToast('회원가입 및 로그인이 완료되었습니다!', 'success');
+          showAppView(currentUser);
+          await fetchUserTodos(true);
+          subscribeToRealtime();
+        } else {
+          // 이메일 확인이 필요한 경우
+          showAuthAlert('success', '가입 신청이 완료되었습니다! Supabase 설정에서 Confirm email을 끄셨다면 바로 로그인하실 수 있습니다.');
+          setAuthMode('login');
+        }
+      }
+    }
+  } catch (err) {
+    showAuthAlert('error', `오류 발생: ${err.message}`);
+  } finally {
+    elements.authSubmitBtn.disabled = false;
+    elements.authSubmitBtn.textContent = authMode === 'login' ? '로그인' : '회원가입';
+  }
+}
+
+async function handleLogout() {
+  if (confirm('로그아웃 하시겠습니까?')) {
+    const client = getSupabase();
+    if (client) {
+      await client.auth.signOut();
+    }
+    currentUser = null;
+    state.tasks = [];
+    if (realtimeChannel && client) {
+      client.removeChannel(realtimeChannel);
+      realtimeChannel = null;
+    }
+    showAuthView();
+    showToast('로그아웃 되었습니다.', 'info');
+  }
+}
+
+/* ==========================================================================
+   Supabase Data Fetching & Sync (RLS 적용된 본인 할 일만 관리)
+   ========================================================================== */
+
+async function fetchUserTodos(showStatus = true) {
+  if (!currentUser) return false;
+  const client = getSupabase();
+  if (!client) {
+    updateSyncBadge('error', '⚠️ 오프라인');
+    return false;
+  }
+
+  if (showStatus) updateSyncBadge('', '🔄 데이터 동기화 중...');
+
+  try {
+    // RLS 정책에 의해 자동으로 auth.uid() = user_id 인 본인 데이터만 반환됩니다.
+    const { data, error } = await client
+      .from('todos')
+      .select('*')
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      console.error('Supabase 데이터 조회 오류:', error);
+      updateSyncBadge('error', '⚠️ 데이터베이스 권한 확인');
+      return false;
+    }
+
+    if (data) {
+      state.tasks = data.map(row => ({
+        id: row.id,
+        user_id: row.user_id,
+        title: row.title,
+        completed: Boolean(row.completed),
+        createdAt: row.created_at,
+        completedAt: row.completed_at,
+        priority: row.priority || 'medium',
+        dueDate: row.due_date || null,
+        category: row.category || '업무',
+        memo: row.memo || ''
+      }));
+      saveUserTasks();
+      renderApp();
+      updateSyncBadge('connected', '🟢 실시간 동기화 중');
+      return true;
+    }
+  } catch (err) {
+    console.error('fetchUserTodos 예외:', err);
+    updateSyncBadge('error', '⚠️ 연결 오류');
+  }
+  return false;
+}
+
+function subscribeToRealtime() {
+  if (!currentUser) return;
+  const client = getSupabase();
+  if (!client) return;
+
+  if (realtimeChannel) {
+    client.removeChannel(realtimeChannel);
+    realtimeChannel = null;
+  }
+
+  try {
+    // 본인의 user_id 변경 사항만 실시간 수신
+    realtimeChannel = client
+      .channel(`todos-user-${currentUser.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'todos',
+          filter: `user_id=eq.${currentUser.id}`
+        },
+        async (payload) => {
+          console.log('⚡ 내 할 일 실시간 변경 감지:', payload);
+          await fetchUserTodos(false);
+        }
+      )
+      .subscribe((status) => {
+        if (status === 'SUBSCRIBED') {
+          updateSyncBadge('connected', '🟢 실시간 동기화 중');
+        }
+      });
+  } catch (err) {
+    console.warn('Realtime 구독 실패:', err);
+  }
+}
+
+/* ==========================================================================
+   Task Operations (CRUD with user_id)
    ========================================================================== */
 
 async function addTask(title, priority, dueDate, category) {
+  if (!currentUser) {
+    showToast('로그인이 필요합니다.', 'danger');
+    showAuthView();
+    return;
+  }
+
   const newTask = {
     id: 'task-' + Date.now() + '-' + Math.random().toString(36).substring(2, 7),
+    user_id: currentUser.id,
     title: title.trim(),
     completed: false,
     createdAt: new Date().toISOString(),
@@ -345,7 +467,7 @@ async function addTask(title, priority, dueDate, category) {
   };
 
   state.tasks.unshift(newTask);
-  saveTasks();
+  saveUserTasks();
   renderApp();
 
   const client = getSupabase();
@@ -353,6 +475,7 @@ async function addTask(title, priority, dueDate, category) {
     try {
       const { error } = await client.from('todos').insert([{
         id: newTask.id,
+        user_id: currentUser.id,
         title: newTask.title,
         completed: false,
         priority: newTask.priority,
@@ -360,21 +483,21 @@ async function addTask(title, priority, dueDate, category) {
         category: newTask.category,
         memo: newTask.memo
       }]);
+
       if (error) {
         console.error('Supabase insert 실패:', error);
-        showToast(`⚠️ 클라우드 동기화 실패: ${error.message}`, 'danger');
+        showToast(`⚠️ 클라우드 저장 실패: ${error.message}`, 'danger');
       } else {
         showToast('새 할 일이 클라우드에 실시간 저장되었습니다.', 'success');
       }
     } catch (err) {
       console.error('Supabase insert 예외:', err);
     }
-  } else {
-    showToast('새 할 일이 로컬에 등록되었습니다.', 'success');
   }
 }
 
 async function toggleTask(id) {
+  if (!currentUser) return;
   const task = state.tasks.find(t => t.id === id);
   if (!task) return;
 
@@ -387,7 +510,7 @@ async function toggleTask(id) {
     showToast(`'${task.title}' 진행 중으로 복원되었습니다.`, 'info');
   }
 
-  saveTasks();
+  saveUserTasks();
   renderApp();
 
   const client = getSupabase();
@@ -396,10 +519,9 @@ async function toggleTask(id) {
       const { error } = await client.from('todos').update({
         completed: task.completed,
         completed_at: task.completedAt
-      }).eq('id', task.id);
-      if (error) {
-        console.error('Supabase toggle update 실패:', error);
-      }
+      }).eq('id', task.id).eq('user_id', currentUser.id);
+
+      if (error) console.error('Supabase toggle update 실패:', error);
     } catch (err) {
       console.warn('Supabase toggle update 예외:', err);
     }
@@ -407,22 +529,21 @@ async function toggleTask(id) {
 }
 
 async function deleteTask(id) {
+  if (!currentUser) return;
   const taskIndex = state.tasks.findIndex(t => t.id === id);
   if (taskIndex === -1) return;
 
   const title = state.tasks[taskIndex].title;
   state.tasks.splice(taskIndex, 1);
-  saveTasks();
+  saveUserTasks();
   renderApp();
   showToast(`'${title}' 삭제되었습니다.`, 'danger');
 
   const client = getSupabase();
   if (client) {
     try {
-      const { error } = await client.from('todos').delete().eq('id', id);
-      if (error) {
-        console.error('Supabase delete 실패:', error);
-      }
+      const { error } = await client.from('todos').delete().eq('id', id).eq('user_id', currentUser.id);
+      if (error) console.error('Supabase delete 실패:', error);
     } catch (err) {
       console.warn('Supabase delete 예외:', err);
     }
@@ -430,22 +551,21 @@ async function deleteTask(id) {
 }
 
 async function clearAllCompleted() {
+  if (!currentUser) return;
   const completedCount = state.tasks.filter(t => t.completed).length;
   if (completedCount === 0) return;
 
   if (confirm(`완료된 할 일 ${completedCount}개를 모두 삭제하시겠습니까?`)) {
     state.tasks = state.tasks.filter(t => !t.completed);
-    saveTasks();
+    saveUserTasks();
     renderApp();
     showToast(`완료된 항목 ${completedCount}개가 정리되었습니다.`, 'danger');
 
     const client = getSupabase();
     if (client) {
       try {
-        const { error } = await client.from('todos').delete().eq('completed', true);
-        if (error) {
-          console.error('Supabase clear completed 실패:', error);
-        }
+        const { error } = await client.from('todos').delete().eq('completed', true).eq('user_id', currentUser.id);
+        if (error) console.error('Supabase clear completed 실패:', error);
       } catch (err) {
         console.warn('Supabase clear completed 예외:', err);
       }
@@ -475,6 +595,8 @@ function closeEditModal() {
 
 async function handleEditFormSubmit(e) {
   e.preventDefault();
+  if (!currentUser) return;
+
   const id = elements.editTaskId.value;
   const task = state.tasks.find(t => t.id === id);
   if (!task) return;
@@ -488,7 +610,7 @@ async function handleEditFormSubmit(e) {
   task.dueDate = elements.editDueDate.value || null;
   task.memo = elements.editMemo.value.trim();
 
-  saveTasks();
+  saveUserTasks();
   closeEditModal();
   renderApp();
   showToast('할 일이 성공적으로 수정되었습니다.', 'success');
@@ -502,12 +624,11 @@ async function handleEditFormSubmit(e) {
         category: task.category,
         due_date: task.dueDate,
         memo: task.memo
-      }).eq('id', task.id);
-      if (error) {
-        console.error('Supabase edit update 실패:', error);
-      }
+      }).eq('id', task.id).eq('user_id', currentUser.id);
+
+      if (error) console.error('Supabase edit update 실패:', error);
     } catch (err) {
-      console.warn('Supabase edit update 실패:', err);
+      console.warn('Supabase edit update 예외:', err);
     }
   }
 }
@@ -519,7 +640,6 @@ async function handleEditFormSubmit(e) {
 function getFilteredAndSortedTasks() {
   let list = [...state.tasks];
 
-  // 1. Search Query Filter
   if (state.searchQuery.trim()) {
     const q = state.searchQuery.trim().toLowerCase();
     list = list.filter(t => 
@@ -529,7 +649,6 @@ function getFilteredAndSortedTasks() {
     );
   }
 
-  // 2. Sorting
   list.sort((a, b) => {
     switch (state.sortBy) {
       case 'due-asc': {
@@ -573,34 +692,28 @@ function createTaskItemElement(task) {
   item.className = `task-item ${task.completed ? 'completed' : ''}`;
   item.id = `item-${task.id}`;
 
-  // Checkbox SVG
   const checkSvg = `
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
       <polyline points="20 6 9 17 4 12"></polyline>
     </svg>
   `;
 
-  // Priority Label
   const priorityLabels = { high: '높음 🔥', medium: '보통', low: '낮음 ☕' };
   const priorityClass = `badge-priority-${task.priority || 'medium'}`;
 
-  // D-Day Badge
   const ddayInfo = getDDayInfo(task.dueDate);
   const ddayBadgeHtml = ddayInfo 
     ? `<span class="badge badge-dday ${ddayInfo.className}">📅 ${ddayInfo.text}</span>` 
     : '';
 
-  // Category Badge
   const categoryBadgeHtml = task.category 
     ? `<span class="badge badge-category">🏷️ ${escapeHtml(task.category)}</span>` 
     : '';
 
-  // Completed Timestamp (for completed items)
   const completedTimeHtml = task.completed && task.completedAt 
     ? `<span class="completed-timestamp">✓ ${formatDateTimeShort(task.completedAt)} 완료</span>` 
     : '';
 
-  // Memo snippet
   const memoSnippetHtml = task.memo 
     ? `<div class="task-memo-preview" title="${escapeHtml(task.memo)}">📝 ${escapeHtml(task.memo)}</div>` 
     : '';
@@ -635,7 +748,6 @@ function createTaskItemElement(task) {
     </div>
   `;
 
-  // Attach event listeners to this item's actions
   item.querySelector('[data-action="toggle"]').addEventListener('click', (e) => {
     e.stopPropagation();
     toggleTask(task.id);
@@ -661,14 +773,11 @@ function renderApp() {
   const activeTasks = allFiltered.filter(t => !t.completed);
   const completedTasks = allFiltered.filter(t => t.completed);
 
-  // Update Badges Count
   elements.activeCountBadge.textContent = `(${activeTasks.length})`;
   elements.completedCountBadge.textContent = `(${completedTasks.length})`;
 
-  // Clear completed button visibility
   elements.clearCompletedBtn.style.display = completedTasks.length > 0 ? 'inline-block' : 'none';
 
-  // Handling Tab Filter View Mode
   if (state.currentFilter === 'active') {
     elements.activeSection.style.display = 'block';
     elements.completedSection.style.display = 'none';
@@ -676,12 +785,11 @@ function renderApp() {
     elements.activeSection.style.display = 'none';
     elements.completedSection.style.display = 'block';
   } else {
-    // 'all'
     elements.activeSection.style.display = 'block';
     elements.completedSection.style.display = 'block';
   }
 
-  // 1. Render Active Tasks
+  // Active Tasks
   elements.activeTasksList.innerHTML = '';
   if (activeTasks.length === 0) {
     elements.activeTasksList.innerHTML = `
@@ -690,7 +798,7 @@ function renderApp() {
           <circle cx="12" cy="12" r="10"></circle>
           <polyline points="12 6 12 12 14 14"></polyline>
         </svg>
-        <p class="empty-text">${state.searchQuery ? '검색 결과가 없습니다.' : '진행 중인 할 일이 없습니다. 새로운 할 일을 추가해보세요!'}</p>
+        <p class="empty-text">${state.searchQuery ? '검색 결과가 없습니다.' : '진행 중인 할 일이 없습니다. 새로운 할 일을 등록해 보세요!'}</p>
       </div>
     `;
   } else {
@@ -699,7 +807,7 @@ function renderApp() {
     });
   }
 
-  // 2. Render Completed Tasks (Bottom Section)
+  // Completed Tasks
   elements.completedTasksList.innerHTML = '';
   if (completedTasks.length === 0) {
     elements.completedTasksList.innerHTML = `
@@ -715,7 +823,7 @@ function renderApp() {
 }
 
 /* ==========================================================================
-   Theme & Event Handlers Setup
+   Theme Setup
    ========================================================================== */
 
 function setupTheme() {
@@ -723,7 +831,6 @@ function setupTheme() {
   applyTheme(savedTheme, false);
 
   elements.themeToggleBtn.addEventListener('click', () => {
-    // 3가지 테마 순환: light -> dark -> sepia -> light
     let nextTheme = 'light';
     let msg = '☀️ 라이트 모드로 전환되었습니다.';
 
@@ -743,33 +850,45 @@ function setupTheme() {
   });
 }
 
-function applyTheme(theme, isUserAction = false) {
+function applyTheme(theme) {
   state.theme = theme;
   document.documentElement.setAttribute('data-theme', theme);
   localStorage.setItem(THEME_KEY, theme);
 
-  // 모든 아이콘 숨김 처리 후 해당하는 아이콘만 표시
   elements.moonIcon.style.display = 'none';
   elements.sunIcon.style.display = 'none';
   elements.coffeeIcon.style.display = 'none';
 
   if (theme === 'light') {
-    // 라이트 모드일 때: 다음인 다크 모드로의 전환을 안내하는 달 아이콘 표시
     elements.moonIcon.style.display = 'block';
     elements.themeToggleBtn.title = '다크 모드로 전환';
   } else if (theme === 'dark') {
-    // 다크 모드일 때: 다음인 세피아(웜) 모드로의 전환을 안내하는 커피 아이콘 표시
     elements.coffeeIcon.style.display = 'block';
-    elements.themeToggleBtn.title = '세피아(아이케어 웜) 모드로 전환';
+    elements.themeToggleBtn.title = '세피아(웜) 모드로 전환';
   } else if (theme === 'sepia') {
-    // 세피아 모드일 때: 다음인 라이트 모드로의 전환을 안내하는 해 아이콘 표시
     elements.sunIcon.style.display = 'block';
     elements.themeToggleBtn.title = '라이트 모드로 전환';
   }
 }
 
+/* ==========================================================================
+   Setup Event Listeners & App Lifecycle
+   ========================================================================== */
+
 function setupEventListeners() {
-  // 1. Add Task Form Submit
+  // Auth Form & Tabs
+  elements.authForm.addEventListener('submit', handleAuthSubmit);
+  elements.tabLogin.addEventListener('click', () => setAuthMode('login'));
+  elements.tabSignup.addEventListener('click', () => setAuthMode('signup'));
+  elements.toggleAuthModeLink.addEventListener('click', (e) => {
+    e.preventDefault();
+    setAuthMode(authMode === 'login' ? 'signup' : 'login');
+  });
+
+  // Logout
+  elements.logoutBtn.addEventListener('click', handleLogout);
+
+  // Todo Form Submit
   elements.todoForm.addEventListener('submit', (e) => {
     e.preventDefault();
     const title = elements.taskTitleInput.value;
@@ -785,7 +904,7 @@ function setupEventListeners() {
     elements.taskTitleInput.focus();
   });
 
-  // 2. Filter Tabs
+  // Filter Tabs
   elements.tabButtons.forEach(btn => {
     btn.addEventListener('click', () => {
       elements.tabButtons.forEach(b => b.classList.remove('active'));
@@ -795,47 +914,41 @@ function setupEventListeners() {
     });
   });
 
-  // 3. Search Input
+  // Search Input
   elements.searchInput.addEventListener('input', (e) => {
     state.searchQuery = e.target.value;
     renderApp();
   });
 
-  // 4. Sort Select
+  // Sort Select
   elements.sortSelect.addEventListener('change', (e) => {
     state.sortBy = e.target.value;
     renderApp();
   });
 
-  // 5. Accordion Toggle for Completed Tasks
+  // Accordion Toggle for Completed Tasks
   elements.accordionHeader.addEventListener('click', (e) => {
-    // If the click originated from the clear button, don't toggle accordion
     if (e.target.closest('#clearCompletedBtn')) return;
-
     state.isCompletedOpen = !state.isCompletedOpen;
     elements.accordionHeader.classList.toggle('open', state.isCompletedOpen);
     elements.completedTasksWrapper.classList.toggle('show', state.isCompletedOpen);
   });
 
-  // 6. Clear All Completed Tasks Button
+  // Clear Completed Button
   elements.clearCompletedBtn.addEventListener('click', (e) => {
     e.stopPropagation();
     clearAllCompleted();
   });
 
-  // 7. Modal Edit Form
+  // Modal Form
   elements.editForm.addEventListener('submit', handleEditFormSubmit);
   elements.closeModalBtn.addEventListener('click', closeEditModal);
   elements.cancelModalBtn.addEventListener('click', closeEditModal);
 
-  // Close modal when clicking on backdrop
   elements.editModal.addEventListener('click', (e) => {
-    if (e.target === elements.editModal) {
-      closeEditModal();
-    }
+    if (e.target === elements.editModal) closeEditModal();
   });
 
-  // ESC key to close modal
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && elements.editModal.classList.contains('open')) {
       closeEditModal();
@@ -843,44 +956,68 @@ function setupEventListeners() {
   });
 }
 
-// Initialization
+// App Initialization
 async function init() {
-  // Set current date banner
   elements.currentDateText.textContent = formatKoreanDate(new Date());
 
   setupTheme();
   setupEventListeners();
 
-  // 1. 빠른 초기 로딩: 로컬 스토리지 또는 기본 샘플 먼저 즉시 화면에 렌더링
-  try {
-    const cached = localStorage.getItem(STORAGE_KEY);
-    if (cached) {
-      state.tasks = JSON.parse(cached);
-    } else {
-      state.tasks = [...INITIAL_SAMPLE_TASKS];
-      saveTasks();
-    }
-  } catch (err) {
-    state.tasks = [...INITIAL_SAMPLE_TASKS];
-  }
-  renderApp(); // 화면을 지체 없이 바로 표시!
-
-  // 2. Supabase SDK 로딩 대기 (CDN 비동기 로딩 대응, 최대 2초)
+  // Supabase SDK 로딩 대기 (최대 2초)
   let attempts = 0;
   while (!getSupabase() && attempts < 10) {
     await new Promise(r => setTimeout(r, 200));
     attempts++;
   }
 
-  // 3. 최신 데이터 조회 및 실시간 웹소켓 구독 시작
-  await fetchFromSupabase(true);
-  subscribeToRealtime();
+  const client = getSupabase();
+  if (!client) {
+    showAuthAlert('error', 'Supabase 연결에 실패했습니다. 페이지를 새로고침해 주세요.');
+    showAuthView();
+    return;
+  }
 
-  // 4. 안전망: 웹소켓이 차단된 환경에서도 5초마다 자동 동기화 (폴링)
+  // 1. 현재 로그인 세션 확인
+  try {
+    const { data: { session } } = await client.auth.getSession();
+    if (session?.user) {
+      currentUser = session.user;
+      showAppView(currentUser);
+      loadUserCachedTasks();
+      await fetchUserTodos(true);
+      subscribeToRealtime();
+    } else {
+      currentUser = null;
+      showAuthView();
+    }
+  } catch (err) {
+    console.error('getSession 오류:', err);
+    showAuthView();
+  }
+
+  // 2. 인증 상태 실시간 변경 리스너 (로그인/로그아웃/토큰갱신)
+  client.auth.onAuthStateChange(async (event, session) => {
+    if (event === 'SIGNED_IN' && session?.user) {
+      if (!currentUser || currentUser.id !== session.user.id) {
+        currentUser = session.user;
+        showAppView(currentUser);
+        loadUserCachedTasks();
+        await fetchUserTodos(true);
+        subscribeToRealtime();
+      }
+    } else if (event === 'SIGNED_OUT') {
+      currentUser = null;
+      state.tasks = [];
+      showAuthView();
+    }
+  });
+
+  // 3. 주기적 자동 동기화 (5초마다 백그라운드 폴링)
   setInterval(() => {
-    fetchFromSupabase(false);
+    if (currentUser) {
+      fetchUserTodos(false);
+    }
   }, 5000);
 }
 
 document.addEventListener('DOMContentLoaded', init);
-
