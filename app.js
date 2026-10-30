@@ -20,12 +20,19 @@ const SUPABASE_URL = 'https://lqfrldvbngtrtjhagjyp.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_aEYmYwtasi-MHfKiXt0K-g_Uux65y89';
 
 let supabaseClient = null;
-if (window.supabase && window.supabase.createClient) {
-  try {
-    supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-  } catch (err) {
-    console.warn('Supabase 초기화 실패:', err);
+let realtimeChannel = null;
+
+function getSupabase() {
+  if (supabaseClient) return supabaseClient;
+  if (window.supabase && typeof window.supabase.createClient === 'function') {
+    try {
+      supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+      return supabaseClient;
+    } catch (err) {
+      console.warn('Supabase createClient 실패:', err);
+    }
   }
+  return null;
 }
 
 // Initial Sample Data for First-time Users
@@ -150,62 +157,28 @@ function saveTasks() {
   }
 }
 
-async function syncLocalTasksToSupabase() {
-  if (!supabaseClient || state.tasks.length === 0) return;
-  try {
-    const rows = state.tasks.map(t => ({
-      id: t.id,
-      title: t.title,
-      completed: t.completed,
-      priority: t.priority,
-      due_date: t.dueDate,
-      category: t.category,
-      memo: t.memo,
-      completed_at: t.completedAt
-    }));
-    await supabaseClient.from('todos').upsert(rows);
-  } catch (err) {
-    console.warn('Supabase 동기화 예외:', err);
-  }
-}
-
-async function loadTasks() {
-  // 1. 빠른 초기 로딩: 로컬 스토리지 데이터 먼저 렌더링
-  try {
-    const cached = localStorage.getItem(STORAGE_KEY);
-    if (cached) {
-      state.tasks = JSON.parse(cached);
-    } else {
-      state.tasks = [...INITIAL_SAMPLE_TASKS];
-      saveTasks();
-    }
-  } catch (err) {
-    state.tasks = [...INITIAL_SAMPLE_TASKS];
-  }
-  renderApp();
-
-  // 2. Supabase 클라우드 데이터 가져오기
-  if (!supabaseClient) {
+async function fetchFromSupabase(showStatus = true) {
+  const client = getSupabase();
+  if (!client) {
     updateSyncBadge('error', '⚠️ 로컬 모드');
-    return;
+    return false;
   }
 
-  updateSyncBadge('', '🔄 연결 중...');
+  if (showStatus) updateSyncBadge('', '🔄 연결 중...');
 
   try {
-    const { data, error } = await supabaseClient
+    const { data, error } = await client
       .from('todos')
       .select('*')
       .order('created_at', { ascending: false });
 
     if (error) {
-      console.warn('Supabase 데이터 조회 오류 (테이블 생성 여부 확인 필요):', error);
-      updateSyncBadge('error', '⚠️ 로컬 저장 모드');
-      return;
+      console.warn('Supabase 데이터 조회 오류:', error);
+      updateSyncBadge('error', '⚠️ 권한 확인 필요');
+      return false;
     }
 
     if (data && data.length > 0) {
-      // Supabase 데이터 컬럼을 프론트엔드 모델로 매핑
       state.tasks = data.map(row => ({
         id: row.id,
         title: row.title,
@@ -219,17 +192,62 @@ async function loadTasks() {
       }));
       saveTasks();
       renderApp();
-      updateSyncBadge('connected', '🟢 Supabase 연결됨');
-    } else {
+      updateSyncBadge('connected', '🟢 실시간 동기화 중');
+      return true;
+    } else if (data && data.length === 0) {
       // 테이블이 비어있으면 초기 로컬 샘플 업로드
-      updateSyncBadge('connected', '🟢 Supabase 연결됨');
+      updateSyncBadge('connected', '🟢 실시간 동기화 중');
       if (state.tasks.length > 0) {
         await syncLocalTasksToSupabase();
       }
+      return true;
     }
   } catch (err) {
     console.error('Supabase 연결 예외:', err);
-    updateSyncBadge('error', '⚠️ 로컬 모드');
+    updateSyncBadge('error', '⚠️ 연결 오류');
+  }
+  return false;
+}
+
+function subscribeToRealtime() {
+  const client = getSupabase();
+  if (!client || realtimeChannel) return;
+
+  try {
+    realtimeChannel = client
+      .channel('todos-realtime-channel')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'todos' }, async (payload) => {
+        console.log('⚡ 실시간 변경 감지 (Realtime):', payload);
+        await fetchFromSupabase(false);
+      })
+      .subscribe((status) => {
+        console.log('Supabase Realtime 연결 상태:', status);
+        if (status === 'SUBSCRIBED') {
+          updateSyncBadge('connected', '🟢 실시간 동기화 중');
+        }
+      });
+  } catch (err) {
+    console.warn('Realtime 구독 실패:', err);
+  }
+}
+
+async function syncLocalTasksToSupabase() {
+  const client = getSupabase();
+  if (!client || state.tasks.length === 0) return;
+  try {
+    const rows = state.tasks.map(t => ({
+      id: t.id,
+      title: t.title,
+      completed: t.completed,
+      priority: t.priority,
+      due_date: t.dueDate,
+      category: t.category,
+      memo: t.memo,
+      completed_at: t.completedAt
+    }));
+    await client.from('todos').upsert(rows);
+  } catch (err) {
+    console.warn('Supabase 동기화 예외:', err);
   }
 }
 
@@ -329,11 +347,11 @@ async function addTask(title, priority, dueDate, category) {
   state.tasks.unshift(newTask);
   saveTasks();
   renderApp();
-  showToast('새 할 일이 등록되었습니다.', 'success');
 
-  if (supabaseClient) {
+  const client = getSupabase();
+  if (client) {
     try {
-      await supabaseClient.from('todos').insert([{
+      const { error } = await client.from('todos').insert([{
         id: newTask.id,
         title: newTask.title,
         completed: false,
@@ -342,9 +360,17 @@ async function addTask(title, priority, dueDate, category) {
         category: newTask.category,
         memo: newTask.memo
       }]);
+      if (error) {
+        console.error('Supabase insert 실패:', error);
+        showToast(`⚠️ 클라우드 동기화 실패: ${error.message}`, 'danger');
+      } else {
+        showToast('새 할 일이 클라우드에 실시간 저장되었습니다.', 'success');
+      }
     } catch (err) {
-      console.warn('Supabase insert 실패:', err);
+      console.error('Supabase insert 예외:', err);
     }
+  } else {
+    showToast('새 할 일이 로컬에 등록되었습니다.', 'success');
   }
 }
 
@@ -364,14 +390,18 @@ async function toggleTask(id) {
   saveTasks();
   renderApp();
 
-  if (supabaseClient) {
+  const client = getSupabase();
+  if (client) {
     try {
-      await supabaseClient.from('todos').update({
+      const { error } = await client.from('todos').update({
         completed: task.completed,
         completed_at: task.completedAt
       }).eq('id', task.id);
+      if (error) {
+        console.error('Supabase toggle update 실패:', error);
+      }
     } catch (err) {
-      console.warn('Supabase toggle update 실패:', err);
+      console.warn('Supabase toggle update 예외:', err);
     }
   }
 }
@@ -386,11 +416,15 @@ async function deleteTask(id) {
   renderApp();
   showToast(`'${title}' 삭제되었습니다.`, 'danger');
 
-  if (supabaseClient) {
+  const client = getSupabase();
+  if (client) {
     try {
-      await supabaseClient.from('todos').delete().eq('id', id);
+      const { error } = await client.from('todos').delete().eq('id', id);
+      if (error) {
+        console.error('Supabase delete 실패:', error);
+      }
     } catch (err) {
-      console.warn('Supabase delete 실패:', err);
+      console.warn('Supabase delete 예외:', err);
     }
   }
 }
@@ -405,11 +439,15 @@ async function clearAllCompleted() {
     renderApp();
     showToast(`완료된 항목 ${completedCount}개가 정리되었습니다.`, 'danger');
 
-    if (supabaseClient) {
+    const client = getSupabase();
+    if (client) {
       try {
-        await supabaseClient.from('todos').delete().eq('completed', true);
+        const { error } = await client.from('todos').delete().eq('completed', true);
+        if (error) {
+          console.error('Supabase clear completed 실패:', error);
+        }
       } catch (err) {
-        console.warn('Supabase clear completed 실패:', err);
+        console.warn('Supabase clear completed 예외:', err);
       }
     }
   }
@@ -455,15 +493,19 @@ async function handleEditFormSubmit(e) {
   renderApp();
   showToast('할 일이 성공적으로 수정되었습니다.', 'success');
 
-  if (supabaseClient) {
+  const client = getSupabase();
+  if (client) {
     try {
-      await supabaseClient.from('todos').update({
+      const { error } = await client.from('todos').update({
         title: task.title,
         priority: task.priority,
         category: task.category,
         due_date: task.dueDate,
         memo: task.memo
       }).eq('id', task.id);
+      if (error) {
+        console.error('Supabase edit update 실패:', error);
+      }
     } catch (err) {
       console.warn('Supabase edit update 실패:', err);
     }
@@ -808,7 +850,26 @@ async function init() {
 
   setupTheme();
   setupEventListeners();
-  await loadTasks();
+
+  // 1. 빠른 캐시 먼저 표시
+  try {
+    const cached = localStorage.getItem(STORAGE_KEY);
+    if (cached) {
+      state.tasks = JSON.parse(cached);
+      renderApp();
+    }
+  } catch (err) {}
+
+  // 2. Supabase SDK 로딩 대기 (CDN 스크립트 비동기 대응, 최대 3초)
+  let attempts = 0;
+  while (!getSupabase() && attempts < 15) {
+    await new Promise(r => setTimeout(r, 200));
+    attempts++;
+  }
+
+  // 3. 최신 데이터 조회 및 실시간 웹소켓 구독 시작
+  await fetchFromSupabase(true);
+  subscribeToRealtime();
 }
 
 document.addEventListener('DOMContentLoaded', init);
